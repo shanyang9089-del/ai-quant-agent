@@ -26,8 +26,8 @@ class RSIMultiMAVolBetV1(IStrategy):
         "0": 0.05,
     }
 
-    # 仅作为系统兜底，给极宽止损，避免复杂止损逻辑
-    stoploss = -0.99
+    # 仅作为系统兜底，给固定止损，保持单变量实验
+    stoploss = -0.02
 
     def leverage(
         self,
