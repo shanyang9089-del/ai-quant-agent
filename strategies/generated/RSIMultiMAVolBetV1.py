@@ -10,8 +10,8 @@ class RSIMultiMAVolBetV1(IStrategy):
     """
     RSIMultiMAVolBetV1
     - 15m / futures / 仅做多
-    - 小仓位 + 20x 杠杆的“第一脚转强下注”策略
-    - 不做复杂量化系统，只保留最少指标与最少决策
+    - 简单、低过滤、趋势跟随
+    - 固定 20x 杠杆 + 固定 20 USDT 小仓位实验策略
     """
 
     INTERFACE_VERSION = 3
@@ -21,12 +21,12 @@ class RSIMultiMAVolBetV1(IStrategy):
     timeframe = "15m"
     startup_candle_count = 120
 
-    # 固定目标：单笔 100%
+    # 固定大目标止盈（实验设定）
     minimal_roi = {
         "0": 1.0,
     }
 
-    # 按实验设计固定为极宽兜底止损
+    # 固定极宽兜底止损（实验设定）
     stoploss = -0.99
 
     def leverage(
@@ -71,24 +71,23 @@ class RSIMultiMAVolBetV1(IStrategy):
         return dataframe
 
     def populate_entry_trend(self, dataframe: DataFrame, metadata: dict[str, Any]) -> DataFrame:
-        """严格按实验设计执行“刚转强第一脚”入场条件。"""
+        """简单趋势跟随入场：仅保留 3 个核心条件。"""
         entry_condition = (
+            # 核心条件 1：多均线趋势成立
             (dataframe["ema_fast"] > dataframe["ema_mid"])
             & (dataframe["ema_mid"] > dataframe["ema_slow"])
-            & (dataframe["ema_fast"] > dataframe["ema_fast"].shift(1))
-            & (dataframe["ema_mid"] > dataframe["ema_mid"].shift(1))
-            & (dataframe["close"] > dataframe["ema_fast"])
-            & (dataframe["close"].shift(1) <= dataframe["ema_fast"].shift(1))
-            & (dataframe["rsi"] > 50)
-            & (dataframe["rsi"].shift(1) <= 50)
-            & (dataframe["volume"] > dataframe["volume_ma"] * 1.2)
-            & (dataframe["close"] <= dataframe["ema_fast"] * 1.01)
+            # 核心条件 2：RSI 动量成立
+            & (dataframe["rsi"] > 55)
+            # 核心条件 3：成交量确认
+            & (dataframe["volume"] > dataframe["volume_ma"])
+            # 基础数据清洗，避免无效成交量K线
+            & (dataframe["volume"] > 0)
         )
 
         dataframe.loc[entry_condition, "enter_long"] = 1
         return dataframe
 
     def populate_exit_trend(self, dataframe: DataFrame, metadata: dict[str, Any]) -> DataFrame:
-        """极简离场：不叠加技术离场，主要由 ROI 与止损控制。"""
+        """离场保持极简：不叠加复杂技术离场，主要由 ROI 与止损控制。"""
         dataframe["exit_long"] = 0
         return dataframe
