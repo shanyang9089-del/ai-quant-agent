@@ -9,9 +9,9 @@ from pandas import DataFrame
 class RSIMultiMAVolBetV1(IStrategy):
     """
     RSIMultiMAVolBetV1
-    - 15m 周期、仅做多、futures 使用场景
-    - 低过滤、偏“反转起点下注”的原型策略
-    - 通过 leverage() 固定 20x（受交易所 max_leverage 限制）
+    - 15m / futures / 仅做多
+    - 小仓位 + 20x 杠杆的“第一脚转强下注”策略
+    - 不做复杂量化系统，只保留最少指标与最少决策
     """
 
     INTERFACE_VERSION = 3
@@ -21,13 +21,13 @@ class RSIMultiMAVolBetV1(IStrategy):
     timeframe = "15m"
     startup_candle_count = 120
 
-    # 固定止盈：1:2 风格（约 5%）
+    # 固定目标：单笔 100%
     minimal_roi = {
-        "0": 0.05,
+        "0": 1.0,
     }
 
-    # 仅作为系统兜底，给固定止损，保持单变量实验
-    stoploss = -0.08
+    # 按实验设计固定为极宽兜底止损
+    stoploss = -0.99
 
     def leverage(
         self,
@@ -40,11 +40,27 @@ class RSIMultiMAVolBetV1(IStrategy):
         side: str,
         **kwargs: Any,
     ) -> float:
-        """固定 20x 杠杆，但不超过交易所/市场允许上限。"""
+        """固定 20x，但不超过交易所允许的最大杠杆。"""
         return min(20.0, max_leverage)
 
+    def custom_stake_amount(
+        self,
+        pair: str,
+        current_time: datetime,
+        current_rate: float,
+        proposed_stake: float,
+        min_stake: float | None,
+        max_stake: float,
+        leverage: float,
+        entry_tag: str | None,
+        side: str,
+        **kwargs: Any,
+    ) -> float:
+        """固定每次开仓 20 USDT。"""
+        return 20.0
+
     def populate_indicators(self, dataframe: DataFrame, metadata: dict[str, Any]) -> DataFrame:
-        """只使用 RSI + 多 EMA + 成交量均线（无额外指标）。"""
+        """只使用 RSI + 多 EMA + 成交量均线。"""
         dataframe["ema_fast"] = ta.EMA(dataframe, timeperiod=8)
         dataframe["ema_mid"] = ta.EMA(dataframe, timeperiod=21)
         dataframe["ema_slow"] = ta.EMA(dataframe, timeperiod=55)
@@ -55,35 +71,24 @@ class RSIMultiMAVolBetV1(IStrategy):
         return dataframe
 
     def populate_entry_trend(self, dataframe: DataFrame, metadata: dict[str, Any]) -> DataFrame:
-        """
-        入场尽量简化，强调“反转起点”：
-        1) 价格重新站上快线
-        2) RSI 从偏弱区重新上穿
-        3) 成交量高于均量
-        4) 仅加一个轻量结构过滤，避免在明显弱势末端盲目抄底
-        """
-        rsi_threshold = 45
-
+        """严格按实验设计执行“刚转强第一脚”入场条件。"""
         entry_condition = (
-            (dataframe["close"] > dataframe["ema_fast"])
+            (dataframe["ema_fast"] > dataframe["ema_mid"])
+            & (dataframe["ema_mid"] > dataframe["ema_slow"])
+            & (dataframe["ema_fast"] > dataframe["ema_fast"].shift(1))
+            & (dataframe["ema_mid"] > dataframe["ema_mid"].shift(1))
+            & (dataframe["close"] > dataframe["ema_fast"])
             & (dataframe["close"].shift(1) <= dataframe["ema_fast"].shift(1))
-            & (dataframe["rsi"] > rsi_threshold)
-            & (dataframe["rsi"].shift(1) <= rsi_threshold)
-            & (dataframe["volume"] > dataframe["volume_ma"])
-            & (dataframe["volume"] > 0)
-            # 轻量结构：中线不低于慢线，避免在明显下行尾段频繁接刀
-            & (dataframe["ema_mid"] >= dataframe["ema_slow"])
-            # 避免站上快线后已经离快线过远，减少追高概率
-            & (dataframe["close"] <= dataframe["ema_mid"] * 1.02)
+            & (dataframe["rsi"] > 50)
+            & (dataframe["rsi"].shift(1) <= 50)
+            & (dataframe["volume"] > dataframe["volume_ma"] * 1.2)
+            & (dataframe["close"] <= dataframe["ema_fast"] * 1.01)
         )
 
         dataframe.loc[entry_condition, "enter_long"] = 1
         return dataframe
 
     def populate_exit_trend(self, dataframe: DataFrame, metadata: dict[str, Any]) -> DataFrame:
-        """
-        出场保持极简：主要依赖 minimal_roi 固定止盈。
-        这里不增加复杂技术离场条件。
-        """
+        """极简离场：不叠加技术离场，主要由 ROI 与止损控制。"""
         dataframe["exit_long"] = 0
         return dataframe
